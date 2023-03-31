@@ -1,0 +1,101 @@
+(* Types Definition                                                              *)
+type keymat.                                    (*' Key Material                 *)
+type key.                                       (*' Symmetric key                *)
+type pri_key.                                   (*' Private key                  *)
+type pub_key.                                   (*' Public key                   *)
+type result.
+
+type cert.                                      (*' Certificate                  *)
+type enrollment_cert.                           (*' Enrollment Certificate       *)
+
+type pseudonym_request.                         (*' Pseudonym Request            *)
+
+(* Channels                                                                      *)
+free pub_ch:channel.                            (*' the public channel           *)
+free pri_ch:channel.                            (*' the private channel          *)
+
+(* Utilities                                                                     *)
+fun gen_pub_key(keymat): pub_key.
+fun gen_pri_key(keymat): pri_key.
+
+(* Digital Signature                                                             *)
+fun sign(bitstring, pri_key):bitstring.
+fun ok():result.
+reduc forall m:bitstring, smat:keymat; checksign(sign(m, gen_pri_key(smat)), m, gen_pub_key(smat)) = ok().
+
+(* Asymmetric encryption                                                         *)
+fun aenc(bitstring, pub_key):bitstring.
+reduc forall m:bitstring, smat:keymat; adec(aenc(m, gen_pub_key(smat)), gen_pri_key(smat)) = m.
+
+(* Butterfly                                                                     *)
+fun butteryfly_f_expand(bitstring): bitstring.
+
+(* Generic Cert                                                                  *)
+fun make_cert(bitstring, pub_key, pri_key):cert [private].
+reduc forall id:bitstring, pub:pub_key, pri:pri_key; get_cert_pub_key(make_cert(id, pub, pri)) = pub.
+reduc forall id:bitstring, pub:pub_key, pri:pri_key; get_cert_id(make_cert(id, pub, pri)) = id.
+
+(* OBE Enrollment Cert                                                           *)
+fun make_enrollment_cert(bitstring, pub_key, pri_key):enrollment_cert [private].
+reduc forall id:bitstring, pub:pub_key, pri:pri_key; get_enrollment_cert_pub_key(make_enrollment_cert(id, pub, pri)) = pub.
+reduc forall id:bitstring, pub:pub_key, pri:pri_key; get_enrollment_cert_id(make_enrollment_cert(id, pub, pri)) = id.
+
+let RAProcessPseudonym(ra_cert:cert, ra_keymat:keymat, rootca_cert:cert, eca_cert:cert, pca_cert:cert) =
+	in(pub_ch, encrypted_request:bitstring).
+
+let OBERequestPseudonym(obe_id:bitstring, obe_keymat:keymat, obe_enrollment_cert:enrollment_cert, rootca_cert:cert, eca_cert:cert, ra_cert:cert, pca_cert:cert) = 
+	new A_seed:bitstring;
+	new H_seed:bitstring;
+	new fk_seed:bitstring;
+	new fe_seed:bitstring;
+	let butterfly_A = butteryfly_f_expand(A_seed) in
+	let butterfly_H = butteryfly_f_expand(H_seed) in
+	let request = (A_seed, H_seed, fk_seed, fe_seed, butterfly_A, butterfly_H) in
+	let obe_pri_key = gen_pri_key(obe_keymat) in
+	let signed_request = sign(request, obe_pri_key) in
+	let ra_pub_key = get_cert_pub_key(ra_cert) in
+	let encrypted_request = aenc(signed_request, ra_pub_key) in
+	out(pub_ch, encrypted_request).
+
+
+	(* SendMessage and Receive Messages *)
+
+process
+	(* Create RootCA keymaterial, public key and private key                     *)
+	new rootca_keymat:keymat;
+	new rootca_id:bitstring;
+	let rootca_pri_key = gen_pri_key(rootca_keymat) in
+	let rootca_pub_key = gen_pub_key(rootca_keymat) in
+	let rootca_cert = make_cert(rootca_id, rootca_pub_key, rootca_pri_key) in
+	out(pub_ch, rootca_cert);
+
+	(* Create ECA                                                                *)
+	new eca_keymat:keymat;
+	new eca_id:bitstring;
+	let eca_pri_key = gen_pri_key(eca_keymat) in
+	let eca_pub_key = gen_pub_key(eca_keymat) in
+	let eca_cert = make_cert(eca_id, eca_pub_key, rootca_pri_key) in
+	out(pub_ch, eca_cert);
+
+	(* Create RA                                                                 *)
+	new ra_keymat:keymat;
+	new ra_id:bitstring;
+	let ra_pub_key = gen_pub_key(ra_keymat) in
+	let ra_cert = make_cert(ra_id, ra_pub_key, rootca_pri_key) in
+	out(pub_ch, ra_cert);
+
+	(* Create PCA                                                                *)
+	new pca_keymat:keymat;
+	new pca_id:bitstring;
+	let pca_pub_key = gen_pub_key(pca_keymat) in
+	let pca_cert = make_cert(pca_id, pca_pub_key, rootca_pri_key) in
+	out(pub_ch, pca_cert);
+
+	(* Create OBE                                                                *)
+	!(	(* Enrollment certificate *)
+		new obe_id:bitstring; 
+		new obe_keymat:keymat; 
+		let obe_pub_key = gen_pub_key(obe_keymat) in
+		let obe_enrollment_cert = make_enrollment_cert(obe_id, obe_pub_key, eca_pri_key) in
+		OBERequestPseudonym(obe_id, obe_keymat, obe_enrollment_cert, rootca_cert, eca_cert, ra_cert, pca_cert)
+	  )
