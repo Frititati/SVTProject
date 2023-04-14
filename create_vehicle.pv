@@ -55,10 +55,11 @@ reduc forall id:bitstring, a:bitstring, b:bitstring, c:bitstring, pub:pub_key; b
 	fun everify(butterfly_sign(m, but_add(but_add(a,b),c)), m, but_add(but_add(but_expand(a), but_expand(b)), but_expand(c))) = ok().
 *)
 
-(* OBE Enrollment Cert                                                           *)
-fun make_enrollment_cert(bitstring, pub_key, pri_key):enrollment_cert [private].
-reduc forall id:bitstring, pub:pub_key, pri:pri_key; get_enrollment_cert_pub_key(make_enrollment_cert(id, pub, pri)) = pub.
-reduc forall id:bitstring, pub:pub_key, pri:pri_key; get_enrollment_cert_id(make_enrollment_cert(id, pub, pri)) = id.
+(* OBE Enrollment Cert                                                           
+	fun make_enrollment_cert(bitstring, pub_key, pri_key):enrollment_cert [private].
+	reduc forall id:bitstring, pub:pub_key, pri:pri_key; get_enrollment_cert_pub_key(make_enrollment_cert(id, pub, pri)) = pub.
+	reduc forall id:bitstring, pub:pub_key, pri:pri_key; get_enrollment_cert_id(make_enrollment_cert(id, pub, pri)) = id.
+*)
 
 (* Butterfly Cert                                                                
 	fun make_butterfly_cert(bitstring, pub_key):butterfly_cert [private].
@@ -66,13 +67,26 @@ reduc forall id:bitstring, pub:pub_key, pri:pri_key; get_enrollment_cert_id(make
 	reduc forall id:bitstring, pub:pub_key; get_butterfly_cert_id(make_butterfly_cert(id, pub)) = id.
 *)
 
-event ValidOBERequestReceived(bitstring).
-event SendValidPseudonymRequest(bitstring).
+event Received_Valid_Pseudonym_Request_RA(bitstring).
+event Sent_Valid_Pseudonym_Request_OBE(bitstring).
+event Sent_Valid_Message(bitstring).
+event Received_Valid_Message(bitstring).
 
-query request:bitstring; event(ValidOBERequestReceived(request)).
-query request:bitstring; event(SendValidPseudonymRequest(request)).
+event Test(bitstring).
 
-query request:bitstring; inj_event(ValidOBERequestReceived(request)) ==> inj_event(SendValidPseudonymRequest(request)).
+(*  Other Queries
+	query request:bitstring; event(Received_Valid_Pseudonym_Request_RA(request)).
+
+	query message:bitstring; event(Sent_Valid_Message(message)).
+	query message:bitstring; event(Received_Valid_Message(message)).
+*)
+
+query message:bitstring; event(Test(message)).
+
+query request:bitstring; event(Sent_Valid_Pseudonym_Request_OBE(request)).
+
+query request:bitstring; event(Received_Valid_Pseudonym_Request_RA(request)) ==> event(Sent_Valid_Pseudonym_Request_OBE(request)).
+query message:bitstring; event(Received_Valid_Message(message)) ==> event(Sent_Valid_Message(message)).
 
 let OBESendMessages(pseudonym_cert:cert, pseudonym_pri_key:pri_key) = 
 	(* OBE can send multiple messages with the same pseudocert                   *)
@@ -81,7 +95,8 @@ let OBESendMessages(pseudonym_cert:cert, pseudonym_pri_key:pri_key) =
 		(* Sign the message                                                      *)
 		let signed_message = sign(message, pseudonym_pri_key) in
 		let full_message = (message, signed_message, pseudonym_cert) in
-		out(pub_ch, full_message)
+		out(pub_ch, full_message);
+		event Sent_Valid_Message(full_message)
 	).
 
 let OBEReceiveMessage(pca_cert:cert) = 
@@ -93,18 +108,19 @@ let OBEReceiveMessage(pca_cert:cert) =
 	(* Check message signature                                                   *)
 	let pseudonym_pub_key = get_cert_pub_key(pseudonym_cert) in
 	if but_check_sign(signed_message, pseudonym_pub_key) = ok() then
-	(* event place *)
-	out(pub_ch, ()).
+	out(pub_ch, ());
+	event Received_Valid_Message(full_message).
 
 let PCAResponsePseudonym(pca_keymat:keymat, rootca_cert:cert, pca_cert:cert) =
 	in(pub_ch, encrypted_request_from_ra:bitstring);
 	let pca_pri_key = gen_pri_key(pca_keymat) in
 	let request_from_ra = adec(encrypted_request_from_ra, pca_pri_key) in
-	let (ra_cert:cert, obe_id:bitstring, butterfly_B:bitstring, butterfly_J:bitstring) = request_from_ra in
+	let (ra_cert:cert, obe_id:bitstring, butterfly_B:bitstring, butterfly_J:bitstring) = get_message_sign(request_from_ra) in
 	let rootca_pub_key = get_cert_pub_key(rootca_cert) in
-	if check_cert(ra_cert, rootca_pub_key)=ok() then
+	if check_cert(ra_cert, rootca_pub_key) = ok() then
 	let ra_pub_key = get_cert_pub_key(ra_cert) in
 	if check_sign(request_from_ra, ra_pub_key)=ok() then
+	event Test(obe_id);
 
 	(* We know that the request_from_ra is valid                                 *)
 	new c_seed:bitstring;
@@ -122,14 +138,14 @@ let RAIntermediaryPseudonym(ra_keymat:keymat, rootca_cert:cert, eca_cert:cert, r
 	in(pub_ch, encrypted_request_from_obe:bitstring);
 	let ra_pri_key = gen_pri_key(ra_keymat) in
 	let request_from_obe = adec(encrypted_request_from_obe, ra_pri_key) in
-	let (obe_enrollment_cert:cert, butterfly_A:bitstring, butterfly_H:bitstring, fk:bitstring, fe:bitstring) = request_from_obe in
+	let (obe_enrollment_cert:cert, butterfly_A:bitstring, butterfly_H:bitstring, fk:bitstring, fe:bitstring) = get_message_sign(request_from_obe) in
 	let eca_pub_key = get_cert_pub_key(eca_cert) in
 	if check_cert(obe_enrollment_cert, eca_pub_key)=ok() then
 	let obe_pub_key = get_cert_pub_key(obe_enrollment_cert) in
 	if check_sign(request_from_obe, obe_pub_key)=ok() then
 
 	(* We know that the request_from_obe is valid                                *)
-	event ValidOBERequestReceived(request_from_obe);
+	event Received_Valid_Pseudonym_Request_RA(request_from_obe);
 
 	let butterfly_B = but_add(butterfly_A, but_expand(fk)) in
 	let butterfly_J = but_add(butterfly_H, but_expand(fe)) in
@@ -137,7 +153,7 @@ let RAIntermediaryPseudonym(ra_keymat:keymat, rootca_cert:cert, eca_cert:cert, r
 	(* TODO: remove obe_id and add the two LA                                    *)
 	let request = (ra_cert, obe_id, butterfly_B, butterfly_J) in
 	(* let ra_pri_key = gen_pri_key(keymat) in *)
-	let signed_request = (request, ra_pri_key) in
+	let signed_request = sign(request, ra_pri_key) in
 	let pca_pub_key = get_cert_pub_key(pca_cert) in
 	let encrypted_request_for_pca = aenc(signed_request, pca_pub_key) in
 	out(pub_ch, encrypted_request_for_pca);
@@ -147,7 +163,7 @@ let RAIntermediaryPseudonym(ra_keymat:keymat, rootca_cert:cert, eca_cert:cert, r
 	out(pub_ch, response_pca).
 
 
-let OBERequestPseudonym(obe_id:bitstring, obe_keymat:keymat, obe_enrollment_cert:enrollment_cert, rootca_cert:cert, eca_cert:cert, ra_cert:cert, pca_cert:cert) = 
+let OBERequestPseudonym(obe_id:bitstring, obe_keymat:keymat, obe_enrollment_cert:cert, rootca_cert:cert, eca_cert:cert, ra_cert:cert, pca_cert:cert) = 
 	new a_seed:bitstring;
 	new h_seed:bitstring;
 	new fk:bitstring;
@@ -161,10 +177,9 @@ let OBERequestPseudonym(obe_id:bitstring, obe_keymat:keymat, obe_enrollment_cert
 	let encrypted_request_for_ra = aenc(signed_request, ra_pub_key) in
 	out(pub_ch, encrypted_request_for_ra);
 
-	event SendValidPseudonymRequest(request);
+	event Sent_Valid_Pseudonym_Request_OBE(request);
 
 	(* sent pseudonim cert request to RA *)
-
 
 	in(pub_ch, encrypted_response_ra:bitstring);
 	let butterfly_dec_key = but_to_pri_key(but_add(h_seed, fe)) in
@@ -206,12 +221,12 @@ process
 	let pca_cert = make_cert(pca_id, pca_pub_key, rootca_pri_key) in
 	out(pub_ch, pca_cert);
 
-	(* Create OBE                                                                *)
-	!(	(* Enrollment certificate *)
-		new obe_id:bitstring; 
-		new obe_keymat:keymat; 
+	(* Enrollment certificate                                                    *)
+	!(
+		new obe_id:bitstring;
+		new obe_keymat:keymat;
 		let obe_pub_key = gen_pub_key(obe_keymat) in
-		let obe_enrollment_cert = make_enrollment_cert(obe_id, obe_pub_key, eca_pri_key) in
+		let obe_enrollment_cert = make_cert(obe_id, obe_pub_key, eca_pri_key) in
 		!(OBERequestPseudonym(obe_id, obe_keymat, obe_enrollment_cert, rootca_cert, eca_cert, ra_cert, pca_cert))
-	  )
-	 | !OBEReceiveMessage(pca_cert)
+	)
+	| !OBEReceiveMessage(pca_cert) | RAIntermediaryPseudonym(ra_keymat, rootca_cert, eca_cert, ra_cert, pca_cert) | PCAResponsePseudonym(pca_keymat, rootca_cert, pca_cert)
