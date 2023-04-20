@@ -67,25 +67,22 @@ reduc forall id:bitstring, a:bitstring, b:bitstring, c:bitstring, pub:pub_key; b
 	reduc forall id:bitstring, pub:pub_key; get_butterfly_cert_id(make_butterfly_cert(id, pub)) = id.
 *)
 
-event Received_Valid_Pseudonym_Request_RA(bitstring).
 event Sent_Valid_Pseudonym_Request_OBE(bitstring).
+event Received_Valid_Pseudonym_Request_RA(bitstring).
+event Sent_Valid_Pseudonym_Request_RA(bitstring).
+event Received_Valid_Pseudonym_Request_PCA(bitstring).
+event Sent_Valid_Pseodonym_Certificate_PCA(cert).
+event Received_Valid_Pseodonym_Certificate_OBE(cert).
+
 event Sent_Valid_Message(bitstring).
 event Received_Valid_Message(bitstring).
 
-event Test(bitstring).
-
-(*  Other Queries
-	query request:bitstring; event(Received_Valid_Pseudonym_Request_RA(request)).
-
-	query message:bitstring; event(Sent_Valid_Message(message)).
-	query message:bitstring; event(Received_Valid_Message(message)).
-*)
-
-query message:bitstring; event(Test(message)).
-
-query request:bitstring; event(Sent_Valid_Pseudonym_Request_OBE(request)).
+query bah:cert; event(Received_Valid_Pseodonym_Certificate_OBE(bah)).
 
 query request:bitstring; event(Received_Valid_Pseudonym_Request_RA(request)) ==> event(Sent_Valid_Pseudonym_Request_OBE(request)).
+query message:bitstring; event(Received_Valid_Pseudonym_Request_PCA(message)) ==> event(Sent_Valid_Pseudonym_Request_RA(message)).
+query new_cert:cert; event(Received_Valid_Pseodonym_Certificate_OBE(new_cert)) ==> event(Sent_Valid_Pseodonym_Certificate_PCA(new_cert)).
+
 query message:bitstring; event(Received_Valid_Message(message)) ==> event(Sent_Valid_Message(message)).
 
 let OBESendMessages(pseudonym_cert:cert, pseudonym_pri_key:pri_key) = 
@@ -120,9 +117,10 @@ let PCAResponsePseudonym(pca_keymat:keymat, rootca_cert:cert, pca_cert:cert) =
 	if check_cert(ra_cert, rootca_pub_key) = ok() then
 	let ra_pub_key = get_cert_pub_key(ra_cert) in
 	if check_sign(request_from_ra, ra_pub_key)=ok() then
-	event Test(obe_id);
 
+	event Received_Valid_Pseudonym_Request_PCA(request_from_ra);
 	(* We know that the request_from_ra is valid                                 *)
+
 	new c_seed:bitstring;
 	let butterfly_C = but_expand(c_seed) in
 	let butterfly_total = but_add(butterfly_B, butterfly_C) in
@@ -131,6 +129,9 @@ let PCAResponsePseudonym(pca_keymat:keymat, rootca_cert:cert, pca_cert:cert) =
 	let response = (new_cert, new_pub_key, c_seed) in
 	let butterfly_enc_key = but_to_pub_key(butterfly_J) in
 	let encrypted_response = aenc(response, butterfly_enc_key) in
+
+	event Sent_Valid_Pseodonym_Certificate_PCA(new_cert);
+
 	out(pub_ch, encrypted_response).
 
 
@@ -186,6 +187,8 @@ let OBERequestPseudonym(obe_id:bitstring, obe_keymat:keymat, obe_enrollment_cert
 	let response_ra = but_adec(encrypted_response_ra, butterfly_dec_key) in
 	let (new_cert:cert, new_pub_key:bitstring, c_seed:bitstring) = response_ra in
 	let new_pri_key = but_to_pri_key(but_add(but_add(a_seed, fk), c_seed)) in
+
+	event Received_Valid_Pseodonym_Certificate_OBE(new_cert);
 
 	(* SendMessage and Receive Messages *)
 	!OBESendMessages(new_cert, new_pri_key).
