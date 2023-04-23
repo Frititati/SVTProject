@@ -15,6 +15,9 @@ type pseudonym_request.                         (*' Pseudonym Request           
 free pub_ch:channel.                            (*' the public channel           *)
 free pri_ch:channel.                            (*' the private channel          *)
 
+(* Tables                                                                        *)
+table pca_table(bitstring, bitstring, bitstring, cert).
+
 (* Utilities                                                                     *)
 fun gen_pub_key(keymat): pub_key.
 fun gen_pri_key(keymat): pri_key.
@@ -35,6 +38,8 @@ fun but_add(bitstring, bitstring): bitstring.
 fun but_keymat(bitstring, bitstring): keymat.
 fun but_to_pub_key(bitstring): pub_key.
 fun but_to_pri_key(bitstring): pri_key.
+fun make_linkage_value(bitstring, bitstring): bitstring.
+fun time_linkage_value(bitstring, bitstring): bitstring.
 
 (* Generic Cert                                                                  *)
 fun make_cert(bitstring, pub_key, pri_key):cert [private].
@@ -77,13 +82,15 @@ event Received_Valid_Pseodonym_Certificate_OBE(cert).
 event Sent_Valid_Message(bitstring).
 event Received_Valid_Message(bitstring).
 
-query bah:cert; event(Received_Valid_Pseodonym_Certificate_OBE(bah)).
+query certificate:cert; event(Received_Valid_Pseodonym_Certificate_OBE(certificate)).
 
 query request:bitstring; event(Received_Valid_Pseudonym_Request_RA(request)) ==> event(Sent_Valid_Pseudonym_Request_OBE(request)).
 query message:bitstring; event(Received_Valid_Pseudonym_Request_PCA(message)) ==> event(Sent_Valid_Pseudonym_Request_RA(message)).
-query new_cert:cert; event(Received_Valid_Pseodonym_Certificate_OBE(new_cert)) ==> event(Sent_Valid_Pseodonym_Certificate_PCA(new_cert)).
+query certificate:cert; event(Received_Valid_Pseodonym_Certificate_OBE(certificate)) ==> event(Sent_Valid_Pseodonym_Certificate_PCA(certificate)).
 
 query message:bitstring; event(Received_Valid_Message(message)) ==> event(Sent_Valid_Message(message)).
+
+query attacker(rootca_keymat).
 
 let OBESendMessages(pseudonym_cert:cert, pseudonym_pri_key:pri_key) = 
 	(* OBE can send multiple messages with the same pseudocert                   *)
@@ -112,7 +119,7 @@ let PCAResponsePseudonym(pca_keymat:keymat, rootca_cert:cert, pca_cert:cert) =
 	in(pub_ch, encrypted_request_from_ra:bitstring);
 	let pca_pri_key = gen_pri_key(pca_keymat) in
 	let request_from_ra = adec(encrypted_request_from_ra, pca_pri_key) in
-	let (ra_cert:cert, obe_id:bitstring, butterfly_B:bitstring, butterfly_J:bitstring) = get_message_sign(request_from_ra) in
+	let (ra_cert:cert, la1_plv_enc:bitstring, la2_plv_enc:bitstring, time:bitstring, butterfly_B:bitstring, butterfly_J:bitstring) = get_message_sign(request_from_ra) in
 	let rootca_pub_key = get_cert_pub_key(rootca_cert) in
 	if check_cert(ra_cert, rootca_pub_key) = ok() then
 	let ra_pub_key = get_cert_pub_key(ra_cert) in
@@ -125,10 +132,16 @@ let PCAResponsePseudonym(pca_keymat:keymat, rootca_cert:cert, pca_cert:cert) =
 	let butterfly_C = but_expand(c_seed) in
 	let butterfly_total = but_add(butterfly_B, butterfly_C) in
 	let new_pub_key = but_to_pub_key(butterfly_total) in
-	let new_cert = make_cert(obe_id, new_pub_key, pca_pri_key) in
+	let la1_plv = adec(la1_plv_enc, pca_pri_key) in
+	let la2_plv = adec(la2_plv_enc, pca_pri_key) in
+	let la1_lv = time_linkage_value(la1_plv, time) in
+	let la2_lv = time_linkage_value(la2_plv, time) in
+	let linkage_value = make_linkage_value(la1_lv, la2_lv) in
+	let new_cert = make_cert(linkage_value, new_pub_key, pca_pri_key) in
 	let response = (new_cert, new_pub_key, c_seed) in
 	let butterfly_enc_key = but_to_pub_key(butterfly_J) in
 	let encrypted_response = aenc(response, butterfly_enc_key) in
+	insert pca_table(la1_plv, la2_plv, linkage_value, new_cert);
 
 	event Sent_Valid_Pseodonym_Certificate_PCA(new_cert);
 
@@ -148,12 +161,12 @@ let RAIntermediaryPseudonym(ra_keymat:keymat, rootca_cert:cert, eca_cert:cert, r
 	(* We know that the request_from_obe is valid                                *)
 	event Received_Valid_Pseudonym_Request_RA(request_from_obe);
 
+	in(pub_ch, la1_plv_enc:bitstring);
+	in(pub_ch, la2_plv_env:bitstring);
+	new time:bitstring;
 	let butterfly_B = but_add(butterfly_A, but_expand(fk)) in
 	let butterfly_J = but_add(butterfly_H, but_expand(fe)) in
-	let obe_id = get_cert_id(obe_enrollment_cert) in
-	(* TODO: remove obe_id and add the two LA                                    *)
-	let request = (ra_cert, obe_id, butterfly_B, butterfly_J) in
-	(* let ra_pri_key = gen_pri_key(keymat) in *)
+	let request = (ra_cert, la1_plv_enc, la2_plv_env, time, butterfly_B, butterfly_J) in
 	let signed_request = sign(request, ra_pri_key) in
 	let pca_pub_key = get_cert_pub_key(pca_cert) in
 	let encrypted_request_for_pca = aenc(signed_request, pca_pub_key) in
@@ -163,6 +176,11 @@ let RAIntermediaryPseudonym(ra_keymat:keymat, rootca_cert:cert, eca_cert:cert, r
 	in(pub_ch, response_pca:bitstring);
 	out(pub_ch, response_pca).
 
+let LAIntermediaryPseudonym(la_keymat:keymat, rootca_cert:cert, pca_cert:cert) = 
+	new val:bitstring;
+	let pca_pub_key = get_cert_pub_key(pca_cert) in
+	let encrypted_request_for_pca = aenc(val, pca_pub_key) in
+	out(pub_ch, encrypted_request_for_pca).
 
 let OBERequestPseudonym(obe_id:bitstring, obe_keymat:keymat, obe_enrollment_cert:cert, rootca_cert:cert, eca_cert:cert, ra_cert:cert, pca_cert:cert) = 
 	new a_seed:bitstring;
@@ -190,12 +208,23 @@ let OBERequestPseudonym(obe_id:bitstring, obe_keymat:keymat, obe_enrollment_cert
 
 	event Received_Valid_Pseodonym_Certificate_OBE(new_cert);
 
+	(*
+	new temp_1:bitstring;
+	new temp_2:bitstring;
+	new temp_3:keymat;
+	new temp_4:pri_key;
+	let pub_temp = gen_pub_key(temp_3) in
+	let pri_temp = gen_pri_key(temp_3) in
+	let temp_cert = make_cert(temp_1, pub_temp, temp_4) in
+	*)
+
 	(* SendMessage and Receive Messages *)
 	!OBESendMessages(new_cert, new_pri_key).
 
+free rootca_keymat:keymat [private].
+
 process
 	(* Create RootCA keymaterial, public key and private key                     *)
-	new rootca_keymat:keymat;
 	new rootca_id:bitstring;
 	let rootca_pri_key = gen_pri_key(rootca_keymat) in
 	let rootca_pub_key = gen_pub_key(rootca_keymat) in
@@ -224,12 +253,31 @@ process
 	let pca_cert = make_cert(pca_id, pca_pub_key, rootca_pri_key) in
 	out(pub_ch, pca_cert);
 
+	(* Create LA1                                                                *)
+	new la1_keymat:keymat;
+	new la1_id:bitstring;
+	let la1_pub_key = gen_pub_key(la1_keymat) in
+	let la1_cert = make_cert(la1_id, la1_pub_key, rootca_pri_key) in
+	out(pub_ch, la1_cert);
+
+	(* Create LA2                                                                *)
+	new la2_keymat:keymat;
+	new la2_id:bitstring;
+	let la2_pub_key = gen_pub_key(la2_keymat) in
+	let la2_cert = make_cert(la2_id, la2_pub_key, rootca_pri_key) in
+	out(pub_ch, la2_cert);
+
 	(* Enrollment certificate                                                    *)
 	!(
 		new obe_id:bitstring;
 		new obe_keymat:keymat;
 		let obe_pub_key = gen_pub_key(obe_keymat) in
 		let obe_enrollment_cert = make_cert(obe_id, obe_pub_key, eca_pri_key) in
+		out(pub_ch, obe_enrollment_cert);
 		!(OBERequestPseudonym(obe_id, obe_keymat, obe_enrollment_cert, rootca_cert, eca_cert, ra_cert, pca_cert))
 	)
-	| !OBEReceiveMessage(pca_cert) | RAIntermediaryPseudonym(ra_keymat, rootca_cert, eca_cert, ra_cert, pca_cert) | PCAResponsePseudonym(pca_keymat, rootca_cert, pca_cert)
+	| !OBEReceiveMessage(pca_cert)
+	| RAIntermediaryPseudonym(ra_keymat, rootca_cert, eca_cert, ra_cert, pca_cert)
+	| PCAResponsePseudonym(pca_keymat, rootca_cert, pca_cert)
+	| LAIntermediaryPseudonym(la1_keymat, rootca_cert, pca_cert)
+	| LAIntermediaryPseudonym(la2_keymat, rootca_cert, pca_cert)
