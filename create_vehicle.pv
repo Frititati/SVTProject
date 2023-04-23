@@ -17,6 +17,7 @@ free pri_ch:channel.                            (*' the private channel         
 
 (* Tables                                                                        *)
 table pca_table(bitstring, bitstring, bitstring, cert).
+table crl(bitstring).
 
 (* Utilities                                                                     *)
 fun gen_pub_key(keymat): pub_key.
@@ -82,6 +83,8 @@ event Received_Valid_Pseodonym_Certificate_OBE(cert).
 event Sent_Valid_Message(bitstring).
 event Received_Valid_Message(bitstring).
 
+event Message_Discarded_Revoked_Certificate(bitstring).
+
 query certificate:cert; event(Received_Valid_Pseodonym_Certificate_OBE(certificate)).
 
 query request:bitstring; event(Received_Valid_Pseudonym_Request_RA(request)) ==> event(Sent_Valid_Pseudonym_Request_OBE(request)).
@@ -94,7 +97,7 @@ query attacker(rootca_keymat).
 
 let OBESendMessages(pseudonym_cert:cert, pseudonym_pri_key:pri_key) = 
 	(* OBE can send multiple messages with the same pseudocert                   *)
-	!(	(* Broadcast message to send *)
+	!(
 		new message:bitstring;
 		(* Sign the message                                                      *)
 		let signed_message = sign(message, pseudonym_pri_key) in
@@ -106,37 +109,60 @@ let OBESendMessages(pseudonym_cert:cert, pseudonym_pri_key:pri_key) =
 let OBEReceiveMessage(pca_cert:cert) = 
 	in(pub_ch, full_message:bitstring);
 	let (message:bitstring, signed_message:bitstring, pseudonym_cert:cert) = full_message in
+
 	(* Check pseudonym certificate                                               *)
 	let pca_pub_key = get_cert_pub_key(pca_cert) in
 	if check_cert(pseudonym_cert, pca_pub_key) = ok() then
+
+	(* Check CRL                                                                 *)
+	let cert_id = get_cert_id(pseudonym_cert) in
+	get crl(=cert_id) in 
+	event Message_Discarded_Revoked_Certificate(cert_id); 0
+	else
+
 	(* Check message signature                                                   *)
 	let pseudonym_pub_key = get_cert_pub_key(pseudonym_cert) in
 	if but_check_sign(signed_message, pseudonym_pub_key) = ok() then
-	out(pub_ch, ());
 	event Received_Valid_Message(full_message).
 
 let PCAResponsePseudonym(pca_keymat:keymat, rootca_cert:cert, pca_cert:cert) =
 	in(pub_ch, encrypted_request_from_ra:bitstring);
+
+	(* Unpack Encrypted Request                                                  *)
 	let pca_pri_key = gen_pri_key(pca_keymat) in
 	let request_from_ra = adec(encrypted_request_from_ra, pca_pri_key) in
 	let (ra_cert:cert, la1_plv_enc:bitstring, la2_plv_enc:bitstring, time:bitstring, butterfly_B:bitstring, butterfly_J:bitstring) = get_message_sign(request_from_ra) in
+	
+	(* Check Certiciate                                                          *)
 	let rootca_pub_key = get_cert_pub_key(rootca_cert) in
 	if check_cert(ra_cert, rootca_pub_key) = ok() then
+
+	(* Check CRL                                                                 *)
+	let cert_id = get_cert_id(ra_cert) in
+	get crl(=cert_id) in 
+	event Message_Discarded_Revoked_Certificate(cert_id); 0
+	else
+
+	(* Check RA Signature                                                        *)		
 	let ra_pub_key = get_cert_pub_key(ra_cert) in
 	if check_sign(request_from_ra, ra_pub_key)=ok() then
 
 	event Received_Valid_Pseudonym_Request_PCA(request_from_ra);
-	(* We know that the request_from_ra is valid                                 *)
 
+	(* gen c and buttefly Expand                                                 *)
 	new c_seed:bitstring;
 	let butterfly_C = but_expand(c_seed) in
 	let butterfly_total = but_add(butterfly_B, butterfly_C) in
 	let new_pub_key = but_to_pub_key(butterfly_total) in
+
+	(* calculate linkage values                                                  *)
 	let la1_plv = adec(la1_plv_enc, pca_pri_key) in
 	let la2_plv = adec(la2_plv_enc, pca_pri_key) in
 	let la1_lv = time_linkage_value(la1_plv, time) in
 	let la2_lv = time_linkage_value(la2_plv, time) in
 	let linkage_value = make_linkage_value(la1_lv, la2_lv) in
+
+	(* sign new pseudonym cert and send back                                     *)
 	let new_cert = make_cert(linkage_value, new_pub_key, pca_pri_key) in
 	let response = (new_cert, new_pub_key, c_seed) in
 	let butterfly_enc_key = but_to_pub_key(butterfly_J) in
@@ -150,29 +176,45 @@ let PCAResponsePseudonym(pca_keymat:keymat, rootca_cert:cert, pca_cert:cert) =
 
 let RAIntermediaryPseudonym(ra_keymat:keymat, rootca_cert:cert, eca_cert:cert, ra_cert:cert, pca_cert:cert) =
 	in(pub_ch, encrypted_request_from_obe:bitstring);
+
+	(* Unpack Encrypted Request                                                  *)
 	let ra_pri_key = gen_pri_key(ra_keymat) in
 	let request_from_obe = adec(encrypted_request_from_obe, ra_pri_key) in
 	let (obe_enrollment_cert:cert, butterfly_A:bitstring, butterfly_H:bitstring, fk:bitstring, fe:bitstring) = get_message_sign(request_from_obe) in
+	
+	(* Check Certiciate                                                          *)
 	let eca_pub_key = get_cert_pub_key(eca_cert) in
 	if check_cert(obe_enrollment_cert, eca_pub_key)=ok() then
+
+	(* Check CRL                                                                 *)
+	let cert_id = get_cert_id(ra_cert) in
+	get crl(=cert_id) in 
+	event Message_Discarded_Revoked_Certificate(cert_id); 0
+	else
+
+	(* Check OBE Signature                                                       *)
 	let obe_pub_key = get_cert_pub_key(obe_enrollment_cert) in
 	if check_sign(request_from_obe, obe_pub_key)=ok() then
 
-	(* We know that the request_from_obe is valid                                *)
 	event Received_Valid_Pseudonym_Request_RA(request_from_obe);
 
+	(* get prelinkage values                                                     *)
 	in(pub_ch, la1_plv_enc:bitstring);
 	in(pub_ch, la2_plv_env:bitstring);
 	new time:bitstring;
+
+	(* buttefly Expand                                                           *)
 	let butterfly_B = but_add(butterfly_A, but_expand(fk)) in
 	let butterfly_J = but_add(butterfly_H, but_expand(fe)) in
+
+	(* request PCA pseudonym certificate                                         *)
 	let request = (ra_cert, la1_plv_enc, la2_plv_env, time, butterfly_B, butterfly_J) in
 	let signed_request = sign(request, ra_pri_key) in
 	let pca_pub_key = get_cert_pub_key(pca_cert) in
 	let encrypted_request_for_pca = aenc(signed_request, pca_pub_key) in
 	out(pub_ch, encrypted_request_for_pca);
-	(* sent pseudonum cert request to PCA                                        *)
 
+	(* Passthrough PCA -> OBE                                                   *)
 	in(pub_ch, response_pca:bitstring);
 	out(pub_ch, response_pca).
 
@@ -275,6 +317,14 @@ process
 		let obe_enrollment_cert = make_cert(obe_id, obe_pub_key, eca_pri_key) in
 		out(pub_ch, obe_enrollment_cert);
 		!(OBERequestPseudonym(obe_id, obe_keymat, obe_enrollment_cert, rootca_cert, eca_cert, ra_cert, pca_cert))
+	)
+	(* Attacker certificate                                                     *)
+	| !(
+		new attacker_id:bitstring;
+		new attacker_keymat:keymat;
+		let attacker_pub_key = gen_pub_key(attacker_keymat) in
+		let attacker_enrollment_cert = make_cert(attacker_id, attacker_pub_key, eca_pri_key) in
+		out(pub_ch, (attacker_id, attacker_keymat, attacker_enrollment_cert))
 	)
 	| !OBEReceiveMessage(pca_cert)
 	| RAIntermediaryPseudonym(ra_keymat, rootca_cert, eca_cert, ra_cert, pca_cert)
