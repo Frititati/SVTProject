@@ -87,11 +87,11 @@ event Message_Discarded_Revoked_Certificate(bitstring).
 
 query certificate:cert; event(Received_Valid_Pseodonym_Certificate_OBE(certificate)).
 
-query request:bitstring; event(Received_Valid_Pseudonym_Request_RA(request)) ==> event(Sent_Valid_Pseudonym_Request_OBE(request)).
-query message:bitstring; event(Received_Valid_Pseudonym_Request_PCA(message)) ==> event(Sent_Valid_Pseudonym_Request_RA(message)).
-query certificate:cert; event(Received_Valid_Pseodonym_Certificate_OBE(certificate)) ==> event(Sent_Valid_Pseodonym_Certificate_PCA(certificate)).
+query request:bitstring; inj-event(Received_Valid_Pseudonym_Request_RA(request)) ==> inj-event(Sent_Valid_Pseudonym_Request_OBE(request)).
+query message:bitstring; inj-event(Received_Valid_Pseudonym_Request_PCA(message)) ==> inj-event(Sent_Valid_Pseudonym_Request_RA(message)).
+query certificate:cert; inj-event(Received_Valid_Pseodonym_Certificate_OBE(certificate)) ==> inj-event(Sent_Valid_Pseodonym_Certificate_PCA(certificate)).
 
-query message:bitstring; event(Received_Valid_Message(message)) ==> event(Sent_Valid_Message(message)).
+query message:bitstring; inj-event(Received_Valid_Message(message)) ==> inj-event(Sent_Valid_Message(message)).
 
 query attacker(rootca_keymat).
 
@@ -218,7 +218,7 @@ let RAIntermediaryPseudonym(ra_keymat:keymat, rootca_cert:cert, eca_cert:cert, r
 	in(pub_ch, response_pca:bitstring);
 	out(pub_ch, response_pca).
 
-let LAIntermediaryPseudonym(la_keymat:keymat, rootca_cert:cert, pca_cert:cert) = 
+let LAIntermediaryPseudonym(la_keymat:keymat, pca_cert:cert) = 
 	new val:bitstring;
 	let pca_pub_key = get_cert_pub_key(pca_cert) in
 	let encrypted_request_for_pca = aenc(val, pca_pub_key) in
@@ -329,5 +329,5 @@ process
 	| !OBEReceiveMessage(pca_cert)
 	| RAIntermediaryPseudonym(ra_keymat, rootca_cert, eca_cert, ra_cert, pca_cert)
 	| PCAResponsePseudonym(pca_keymat, rootca_cert, pca_cert)
-	| LAIntermediaryPseudonym(la1_keymat, rootca_cert, pca_cert)
-	| LAIntermediaryPseudonym(la2_keymat, rootca_cert, pca_cert)
+	| LAIntermediaryPseudonym(la1_keymat, pca_cert)
+	| LAIntermediaryPseudonym(la2_keymat, pca_cert)
