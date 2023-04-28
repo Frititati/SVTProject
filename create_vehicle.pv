@@ -1,22 +1,22 @@
 (* Types Definition                                                              *)
-type keymat.                                    (*' Key Material                 *)
-type key.                                       (*' Symmetric key                *)
-type pri_key.                                   (*' Private key                  *)
-type pub_key.                                   (*' Public key                   *)
+type keymat.                                    (*` Key Material                 *)
+type key.                                       (*` Symmetric key                *)
+type pri_key.                                   (*` Private key                  *)
+type pub_key.                                   (*` Public key                   *)
 type result.
 
-type cert.                                      (*' Certificate                  *)
-type enrollment_cert.                           (*' Enrollment Certificate       *)
-type butterfly_cert.                            (*' Bufferfly Certificate        *)
+type cert.                                      (*` Certificate                  *)
+type enrollment_cert.                           (*` Enrollment Certificate       *)
+type butterfly_cert.                            (*` Bufferfly Certificate        *)
 
-type pseudonym_request.                         (*' Pseudonym Request            *)
+type pseudonym_request.                         (*` Pseudonym Request            *)
 
 (* Channels                                                                      *)
-free pub_ch:channel.                            (*' the public channel           *)
-free pri_ch:channel.                            (*' the private channel          *)
+free pub_ch:channel.                            (*` the public channel           *)
 
 (* Tables                                                                        *)
-table pca_table(bitstring, bitstring, bitstring, cert).
+table pca_table(bitstring, bitstring, bitstring, bitstring, cert).
+table ra_table(bitstring, cert).
 table crl(bitstring).
 
 (* Utilities                                                                     *)
@@ -52,6 +52,10 @@ reduc forall id:bitstring, pub:pub_key, smat:keymat; check_cert(make_cert(id, pu
 reduc forall m:bitstring, a:bitstring, b:bitstring; but_adec(aenc(m, but_to_pub_key(but_add(but_expand(a), but_expand(b)))), but_to_pri_key(but_add(a, b))) = m.
 reduc forall m:bitstring, a:bitstring, b:bitstring, c:bitstring; but_check_sign(sign(m, but_to_pri_key(but_add(but_add(a, b), c))), but_to_pub_key(but_add(but_add(but_expand(a), but_expand(b)), but_expand(c)))) = ok().
 
+(* HASH    *)
+fun hash(bitstring): bitstring.
+
+
 (*
 reduc forall id:bitstring, a:bitstring, b:bitstring, c:bitstring, pub:pub_key; but_check_cert(make_cert(id, pub, but_to_pri_key(but_add(but_add(a, b), c))), but_to_pub_key(but_add(but_add(but_expand(a), but_expand(b)), but_expand(c)))) = ok().
 *)
@@ -85,13 +89,17 @@ event Received_Valid_Message(bitstring).
 
 event Message_Discarded_Revoked_Certificate(bitstring).
 
+event Test(bitstring).
+
 query certificate:cert; event(Received_Valid_Pseodonym_Certificate_OBE(certificate)).
 
 query request:bitstring; inj-event(Received_Valid_Pseudonym_Request_RA(request)) ==> inj-event(Sent_Valid_Pseudonym_Request_OBE(request)).
-query message:bitstring; inj-event(Received_Valid_Pseudonym_Request_PCA(message)) ==> inj-event(Sent_Valid_Pseudonym_Request_RA(message)).
+query request:bitstring; inj-event(Received_Valid_Pseudonym_Request_PCA(request)) ==> inj-event(Sent_Valid_Pseudonym_Request_RA(request)).
 query certificate:cert; inj-event(Received_Valid_Pseodonym_Certificate_OBE(certificate)) ==> inj-event(Sent_Valid_Pseodonym_Certificate_PCA(certificate)).
 
 query message:bitstring; inj-event(Received_Valid_Message(message)) ==> inj-event(Sent_Valid_Message(message)).
+
+query message:bitstring; event(Message_Discarded_Revoked_Certificate(message)).
 
 query attacker(rootca_keymat).
 
@@ -102,8 +110,8 @@ let OBESendMessages(pseudonym_cert:cert, pseudonym_pri_key:pri_key) =
 		(* Sign the message                                                      *)
 		let signed_message = sign(message, pseudonym_pri_key) in
 		let full_message = (message, signed_message, pseudonym_cert) in
-		out(pub_ch, full_message);
-		event Sent_Valid_Message(full_message)
+		event Sent_Valid_Message(full_message);
+		out(pub_ch, full_message)
 	).
 
 let OBEReceiveMessage(pca_cert:cert) = 
@@ -167,11 +175,13 @@ let PCAResponsePseudonym(pca_keymat:keymat, rootca_cert:cert, pca_cert:cert) =
 	let response = (new_cert, new_pub_key, c_seed) in
 	let butterfly_enc_key = but_to_pub_key(butterfly_J) in
 	let encrypted_response = aenc(response, butterfly_enc_key) in
-	insert pca_table(la1_plv, la2_plv, linkage_value, new_cert);
+	let signed_response = sign(encrypted_response, pca_pri_key) in
+	let hash_request = hash(encrypted_request_from_ra) in
+	insert pca_table(linkage_value, hash_request, la1_plv, la2_plv, new_cert);
 
 	event Sent_Valid_Pseodonym_Certificate_PCA(new_cert);
 
-	out(pub_ch, encrypted_response).
+	out(pub_ch, signed_response).
 
 
 let RAIntermediaryPseudonym(ra_keymat:keymat, rootca_cert:cert, eca_cert:cert, ra_cert:cert, pca_cert:cert) =
@@ -188,7 +198,7 @@ let RAIntermediaryPseudonym(ra_keymat:keymat, rootca_cert:cert, eca_cert:cert, r
 
 	(* Check CRL                                                                 *)
 	let cert_id = get_cert_id(ra_cert) in
-	get crl(=cert_id) in 
+	get crl(=cert_id) in
 	event Message_Discarded_Revoked_Certificate(cert_id); 0
 	else
 
@@ -212,7 +222,10 @@ let RAIntermediaryPseudonym(ra_keymat:keymat, rootca_cert:cert, eca_cert:cert, r
 	let signed_request = sign(request, ra_pri_key) in
 	let pca_pub_key = get_cert_pub_key(pca_cert) in
 	let encrypted_request_for_pca = aenc(signed_request, pca_pub_key) in
+	let hash_request = hash(encrypted_request_for_pca) in
+	event Sent_Valid_Pseudonym_Request_RA(signed_request);
 	out(pub_ch, encrypted_request_for_pca);
+	insert ra_table(hash_request, obe_enrollment_cert);
 
 	(* Passthrough PCA -> OBE                                                   *)
 	in(pub_ch, response_pca:bitstring);
@@ -236,15 +249,20 @@ let OBERequestPseudonym(obe_id:bitstring, obe_keymat:keymat, obe_enrollment_cert
 	let signed_request = sign(request, obe_pri_key) in
 	let ra_pub_key = get_cert_pub_key(ra_cert) in
 	let encrypted_request_for_ra = aenc(signed_request, ra_pub_key) in
+	event Sent_Valid_Pseudonym_Request_OBE(signed_request);
 	out(pub_ch, encrypted_request_for_ra);
 
-	event Sent_Valid_Pseudonym_Request_OBE(request);
 
 	(* sent pseudonim cert request to RA *)
 
 	in(pub_ch, encrypted_response_ra:bitstring);
+
+	(* Check PCA Signature                                                       *)		
+	let pca_pub_key = get_cert_pub_key(pca_cert) in
+	if check_sign(encrypted_response_ra, pca_pub_key)=ok() then
+
 	let butterfly_dec_key = but_to_pri_key(but_add(h_seed, fe)) in
-	let response_ra = but_adec(encrypted_response_ra, butterfly_dec_key) in
+	let response_ra = but_adec(get_message_sign(encrypted_response_ra), butterfly_dec_key) in
 	let (new_cert:cert, new_pub_key:bitstring, c_seed:bitstring) = response_ra in
 	let new_pri_key = but_to_pri_key(but_add(but_add(a_seed, fk), c_seed)) in
 
