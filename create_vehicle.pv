@@ -55,28 +55,6 @@ reduc forall m:bitstring, a:bitstring, b:bitstring, c:bitstring; but_check_sign(
 (* HASH    *)
 fun hash(bitstring): bitstring.
 
-
-(*
-reduc forall id:bitstring, a:bitstring, b:bitstring, c:bitstring, pub:pub_key; but_check_cert(make_cert(id, pub, but_to_pri_key(but_add(but_add(a, b), c))), but_to_pub_key(but_add(but_add(but_expand(a), but_expand(b)), but_expand(c)))) = ok().
-*)
-
-(*
-	fun everify(esign(m, plus(a,fk,c)), m, plus(plus(epk(a), epk(fk)), epk(c))) = etrue,
-	fun everify(butterfly_sign(m, but_add(but_add(a,b),c)), m, but_add(but_add(but_expand(a), but_expand(b)), but_expand(c))) = ok().
-*)
-
-(* OBE Enrollment Cert                                                           
-	fun make_enrollment_cert(bitstring, pub_key, pri_key):enrollment_cert [private].
-	reduc forall id:bitstring, pub:pub_key, pri:pri_key; get_enrollment_cert_pub_key(make_enrollment_cert(id, pub, pri)) = pub.
-	reduc forall id:bitstring, pub:pub_key, pri:pri_key; get_enrollment_cert_id(make_enrollment_cert(id, pub, pri)) = id.
-*)
-
-(* Butterfly Cert                                                                
-	fun make_butterfly_cert(bitstring, pub_key):butterfly_cert [private].
-	reduc forall id:bitstring, pub:pub_key; get_butterfly_cert_pub_key(make_butterfly_cert(id, pub)) = pub.
-	reduc forall id:bitstring, pub:pub_key; get_butterfly_cert_id(make_butterfly_cert(id, pub)) = id.
-*)
-
 event Sent_Valid_Pseudonym_Request_OBE(bitstring).
 event Received_Valid_Pseudonym_Request_RA(bitstring).
 event Sent_Valid_Pseudonym_Request_RA(bitstring).
@@ -300,7 +278,7 @@ let PCAReport(pca_keymat:keymat, rootca_cert:cert, pca_cert:cert) =
 	(* Unpack Encrypted Request                                                  *)
 	let pca_pri_key = gen_pri_key(pca_keymat) in
 	let signed_request_ma = adec(encrypted_signed_request_ma, pca_pri_key) in
-	let (ma_cert:cert, linkage_value:bitstring) = get_message_sign(signed_request_ma) in
+	let (ma_cert:cert, linkage_value:bitstring, nonce:bitstring) = get_message_sign(signed_request_ma) in
 
 	(* Check Certiciate                                                          *)
 	let rootca_pub_key = get_cert_pub_key(rootca_cert) in
@@ -322,7 +300,7 @@ let PCAReport(pca_keymat:keymat, rootca_cert:cert, pca_cert:cert) =
 	get pca_table(=linkage_value, hash_request, la1_plv, la2_plv, new_cert) in
 
 	(* sign response, encrypt send back                                          *)
-	let response = hash_request in
+	let response = (hash_request, nonce) in
 	let signed_response = sign(response, pca_pri_key) in
 	let encrypted_signed_response = aenc(signed_response, ma_pub_key) in
 	event Sent_Hash_Value_PCA(encrypted_signed_response);
@@ -361,6 +339,7 @@ let RAReport(ra_keymat:keymat, rootca_cert:cert, ra_cert:cert) =
 
 let MAReport(ma_keymat:keymat, rootca_cert:cert, ma_cert:cert, ra_cert:cert, pca_cert:cert) =
 	in(pub_ch, signed_report:bitstring);
+	new nonce1:bitstring;
 
 	(* Check ROOT Signature                                                      *)		
 	let rootca_pub_key = get_cert_pub_key(rootca_cert) in
@@ -368,7 +347,7 @@ let MAReport(ma_keymat:keymat, rootca_cert:cert, ma_cert:cert, ra_cert:cert, pca
 
 	let linkage_value = get_message_sign(signed_report) in
 	insert crl(linkage_value);
-	let request_for_pca = (ma_cert, linkage_value) in
+	let request_for_pca = (ma_cert, linkage_value, nonce1) in
 	let ma_pri_key = gen_pri_key(ma_keymat) in
 	let signed_request_for_pca = sign(request_for_pca, ma_pri_key) in
 	let pca_pub_key = get_cert_pub_key(pca_cert) in
@@ -380,10 +359,13 @@ let MAReport(ma_keymat:keymat, rootca_cert:cert, ma_cert:cert, ra_cert:cert, pca
 
 	(* Unpack Encrypted Request                                                  *)
 	let signed_response_pca = adec(encrypted_signed_response_pca, ma_pri_key) in
-	let hash_request = get_message_sign(signed_response_pca) in
+	let request = get_message_sign(signed_response_pca) in
+	let (hash_request:bitstring, nonce2:bitstring) = request in
 
 	(* Check PCA Signature                                                       *)		
 	if check_sign(signed_response_pca, pca_pub_key)=ok() then
+
+	if nonce1=nonce2 then
 
 	event Received_Hash_Value_MA(encrypted_signed_response_pca);
 
@@ -470,9 +452,9 @@ process
 		new bad_obe_keymat:keymat;
 		let bad_obe_pub_key = gen_pub_key(bad_obe_keymat) in
 		let bad_obe_enrollment_cert = make_cert(bad_obe_id, bad_obe_pub_key, eca_pri_key) in
-		let signed_request = sign(bad_obe_id, rootca_pri_key) in
-		out(pub_ch, signed_request);
-		!(OBERequestPseudonym(bad_obe_id, bad_obe_keymat, bad_obe_enrollment_cert, rootca_cert, eca_cert, ra_cert, pca_cert))
+		!(OBERequestPseudonym(bad_obe_id, bad_obe_keymat, bad_obe_enrollment_cert, rootca_cert, eca_cert, ra_cert, pca_cert)) |
+		!(let signed_request = sign(bad_obe_id, rootca_pri_key) in
+		out(pub_ch, signed_request))
 	)
 	| !OBEReceiveMessage(pca_cert)
 	| RAPseudonym(ra_keymat, rootca_cert, eca_cert, ra_cert, pca_cert)
