@@ -98,21 +98,6 @@ event Received_Hash_Value_RA(bitstring).
 
 event Add_to_CRL(bitstring).
 
-query certificate:cert; event(Received_Valid_Pseodonym_Certificate_OBE(certificate)).
-
-query request:bitstring; inj-event(Received_Valid_Pseudonym_Request_RA(request)) ==> inj-event(Sent_Valid_Pseudonym_Request_OBE(request)).
-query request:bitstring; inj-event(Received_Valid_Pseudonym_Request_PCA(request)) ==> inj-event(Sent_Valid_Pseudonym_Request_RA(request)).
-query certificate:cert; inj-event(Received_Valid_Pseodonym_Certificate_OBE(certificate)) ==> inj-event(Sent_Valid_Pseodonym_Certificate_PCA(certificate)).
-
-query message:bitstring; inj-event(Received_Valid_Message(message)) ==> inj-event(Sent_Valid_Message(message)).
-
-query message:bitstring; event(Message_Discarded_Revoked_Certificate(message)).
-
-query request:bitstring; inj-event(Received_Linkage_Value_PCA(request)) ==> inj-event(Sent_Linkage_Value_MA(request)).
-query request:bitstring; inj-event(Received_Hash_Value_MA(request)) ==> inj-event(Sent_Hash_Value_PCA(request)).
-query request:bitstring; inj-event(Received_Hash_Value_RA(request)) ==> inj-event(Sent_Hash_Value_MA(request)).
-
-query id:bitstring; event(Add_to_CRL(id)).
 
 let OBESendMessages(pseudonym_cert:cert, pseudonym_pri_key:pri_key) = 
 	(* OBE can send multiple messages with the same pseudocert                   *)
@@ -397,7 +382,8 @@ let MAReport(ma_keymat:keymat, rootca_cert:cert, ma_cert:cert, ra_cert:cert, pca
 
 free rootca_keymat:keymat [private].
 
-process
+equivalence
+	
 	(* Create RootCA keymaterial, public key and private key                     *)
 	new rootca_id:bitstring;
 	let rootca_pri_key = gen_pri_key(rootca_keymat) in
@@ -471,8 +457,91 @@ process
 		let bad_obe_pub_key = gen_pub_key(bad_obe_keymat) in
 		let bad_obe_enrollment_cert = make_cert(bad_obe_id, bad_obe_pub_key, eca_pri_key) in
 		let signed_request = sign(bad_obe_id, rootca_pri_key) in
-		out(pub_ch, signed_request);
-		!(OBERequestPseudonym(bad_obe_id, bad_obe_keymat, bad_obe_enrollment_cert, rootca_cert, eca_cert, ra_cert, pca_cert))
+		out(pub_ch, signed_request)
+	)
+	| !OBEReceiveMessage(pca_cert)
+	| RAPseudonym(ra_keymat, rootca_cert, eca_cert, ra_cert, pca_cert)
+	| PCAPseudonym(pca_keymat, rootca_cert, pca_cert)
+	| LAPseudonym(la1_keymat, pca_cert)
+	| LAPseudonym(la2_keymat, pca_cert)
+	| MAReport(ma_keymat, rootca_cert, ma_cert, ra_cert, pca_cert)
+	| RAReport(ra_keymat, rootca_cert, ra_cert)
+	| PCAReport(pca_keymat, rootca_cert, pca_cert)
+
+	(* Create RootCA keymaterial, public key and private key                     *)
+	new rootca_id:bitstring;
+	let rootca_pri_key = gen_pri_key(rootca_keymat) in
+	let rootca_pub_key = gen_pub_key(rootca_keymat) in
+	let rootca_cert = make_cert(rootca_id, rootca_pub_key, rootca_pri_key) in
+	out(pub_ch, rootca_cert);
+
+	(* Create ECA                                                                *)
+	new eca_keymat:keymat;
+	new eca_id:bitstring;
+	let eca_pri_key = gen_pri_key(eca_keymat) in
+	let eca_pub_key = gen_pub_key(eca_keymat) in
+	let eca_cert = make_cert(eca_id, eca_pub_key, rootca_pri_key) in
+	out(pub_ch, eca_cert);
+
+	(* Create RA                                                                 *)
+	new ra_keymat:keymat;
+	new ra_id:bitstring;
+	let ra_pub_key = gen_pub_key(ra_keymat) in
+	let ra_cert = make_cert(ra_id, ra_pub_key, rootca_pri_key) in
+	out(pub_ch, ra_cert);
+
+	(* Create PCA                                                                *)
+	new pca_keymat:keymat;
+	new pca_id:bitstring;
+	let pca_pub_key = gen_pub_key(pca_keymat) in
+	let pca_cert = make_cert(pca_id, pca_pub_key, rootca_pri_key) in
+	out(pub_ch, pca_cert);
+
+	(* Create LA1                                                                *)
+	new la1_keymat:keymat;
+	new la1_id:bitstring;
+	let la1_pub_key = gen_pub_key(la1_keymat) in
+	let la1_cert = make_cert(la1_id, la1_pub_key, rootca_pri_key) in
+	out(pub_ch, la1_cert);
+
+	(* Create LA2                                                                *)
+	new la2_keymat:keymat;
+	new la2_id:bitstring;
+	let la2_pub_key = gen_pub_key(la2_keymat) in
+	let la2_cert = make_cert(la2_id, la2_pub_key, rootca_pri_key) in
+	out(pub_ch, la2_cert);
+
+	(* Create MA                                                                 *)
+	new ma_keymat:keymat;
+	new ma_id:bitstring;
+	let ma_pub_key = gen_pub_key(ma_keymat) in
+	let ma_cert = make_cert(ma_id, ma_pub_key, rootca_pri_key) in
+	out(pub_ch, ma_cert);
+
+	(* Enrollment certificate                                                    *)
+	!(
+		new obe_id:bitstring;
+		new obe_keymat:keymat;
+		let obe_pub_key = gen_pub_key(obe_keymat) in
+		let obe_enrollment_cert = make_cert(obe_id, obe_pub_key, eca_pri_key) in
+		out(pub_ch, obe_enrollment_cert);
+		!(OBERequestPseudonym(obe_id, obe_keymat, obe_enrollment_cert, rootca_cert, eca_cert, ra_cert, pca_cert))
+	)
+	(* Attacker certificate                                                     *)
+	| !(
+		new attacker_id:bitstring;
+		new attacker_keymat:keymat;
+		let attacker_pub_key = gen_pub_key(attacker_keymat) in
+		let attacker_enrollment_cert = make_cert(attacker_id, attacker_pub_key, eca_pri_key) in
+		out(pub_ch, (attacker_id, attacker_keymat, attacker_enrollment_cert))
+	)
+	| (
+		new bad_obe_id:bitstring;
+		new bad_obe_keymat:keymat;
+		let bad_obe_pub_key = gen_pub_key(bad_obe_keymat) in
+		let bad_obe_enrollment_cert = make_cert(bad_obe_id, bad_obe_pub_key, eca_pri_key) in
+		let signed_request = sign(bad_obe_id, rootca_pri_key) in
+		out(pub_ch, signed_request)
 	)
 	| !OBEReceiveMessage(pca_cert)
 	| RAPseudonym(ra_keymat, rootca_cert, eca_cert, ra_cert, pca_cert)
