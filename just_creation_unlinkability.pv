@@ -277,6 +277,8 @@ let OBERequestPseudonym2(obe_id:bitstring, obe_keymat:keymat, obe_enrollment_cer
 
 
 free rootca_keymat:keymat [private].
+free obe_keymat:keymat [private].
+free obe_id:bitstring [private].
 
 equivalence
 	(
@@ -331,21 +333,11 @@ equivalence
 		out(pub_ch, ma_cert);
 
 		(* Enrollment certificate                                                    *)
-		!(
-			new obe_id:bitstring;
-			new obe_keymat:keymat;
+		(
 			let obe_pub_key = gen_pub_key(obe_keymat) in
 			let obe_enrollment_cert = make_cert(obe_id, obe_pub_key, eca_pri_key) in
 			out(pub_ch, obe_enrollment_cert);
-			!(OBERequestPseudonym(obe_id, obe_keymat, obe_enrollment_cert, rootca_cert, eca_cert, ra_cert, pca_cert))
-		)
-		(* Attacker certificate                                                     *)
-		| !(
-			new attacker_id:bitstring;
-			new attacker_keymat:keymat;
-			let attacker_pub_key = gen_pub_key(attacker_keymat) in
-			let attacker_enrollment_cert = make_cert(attacker_id, attacker_pub_key, eca_pri_key) in
-			out(pub_ch, (attacker_id, attacker_keymat, attacker_enrollment_cert))
+			OBERequestPseudonym(obe_id, obe_keymat, obe_enrollment_cert, rootca_cert, eca_cert, ra_cert, pca_cert)
 		)
 		
 		| !OBEReceiveMessage(pca_cert)
@@ -406,21 +398,11 @@ equivalence
 		out(pub_ch, ma_cert);
 
 		(* Enrollment certificate                                                    *)
-		!(
-			new obe_id:bitstring;
-			new obe_keymat:keymat;
+		(
 			let obe_pub_key = gen_pub_key(obe_keymat) in
 			let obe_enrollment_cert = make_cert(obe_id, obe_pub_key, eca_pri_key) in
 			out(pub_ch, obe_enrollment_cert);
-			!(OBERequestPseudonym2(obe_id, obe_keymat, obe_enrollment_cert, rootca_cert, eca_cert, ra_cert, pca_cert))
-		)
-		(* Attacker certificate                                                     *)
-		| !(
-			new attacker_id:bitstring;
-			new attacker_keymat:keymat;
-			let attacker_pub_key = gen_pub_key(attacker_keymat) in
-			let attacker_enrollment_cert = make_cert(attacker_id, attacker_pub_key, eca_pri_key) in
-			out(pub_ch, (attacker_id, attacker_keymat, attacker_enrollment_cert))
+			OBERequestPseudonym2(obe_id, obe_keymat, obe_enrollment_cert, rootca_cert, eca_cert, ra_cert, pca_cert)
 		)
 		
 		| !OBEReceiveMessage(pca_cert)

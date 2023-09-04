@@ -80,22 +80,16 @@ event Extracted_Hash_Request_PCA(bitstring).
 
 event Add_to_CRL(bitstring).
 
-event Receive_Report(bitstring).
-
-query str:bitstring; event(Receive_Report(str)).
-
-(* Q1.1: honest vehicle can receive a valid pseudonym certificate - expected: false *)
-
-(* Q1.2: Ra can receive pseudonym requests only from honest vehicles - expected: false (the attacker has a valid enrollment certificate) *)
+(* Q1.1: Ra can receive pseudonym requests only from honest vehicles - expected: false (the attacker has a valid enrollment certificate) *)
 query request:bitstring; event(Received_Valid_Pseudonym_Request_RA(request)) ==> event(Sent_Valid_Pseudonym_Request_OBE(request)).
 
-(* Q1.3: authentication of the Ra to the Pca *)
+(* Q1.2: authentication of the Ra to the Pca *)
 query request:bitstring; event(Received_Valid_Pseudonym_Request_PCA(request)) ==> event(Sent_Valid_Pseudonym_Request_RA(request)).
 
-(* Q1.4: authentication of the Pca to the vehicle *)
+(* Q1.3: authentication of the Pca to the vehicle *)
 query certificate:cert; event(Received_Valid_Pseodonym_Certificate_OBE(certificate)) ==> event(Sent_Valid_Pseodonym_Certificate_PCA(certificate)).
 
-(* Q1.5: only honest vehicle can send valid message - expected: false *)
+(* Q1.4: only honest vehicle can send valid message - expected: false *)
 query message:bitstring; event(Received_Valid_Message(message)) ==> event(Sent_Valid_Message(message)).
 
 
