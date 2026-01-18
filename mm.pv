@@ -1,0 +1,61 @@
+% Define types for keys and some data
+type secretKey.
+type someData.
+
+% Define tables to store the keys and some data
+table storedKey(secretKey).
+table storedData(someData).
+
+% Phase 0: Generate a secret key and some data, store them in tables
+let phase0 = 
+  new key:secretKey;
+  new data:someData;
+  event generateKey(key);
+  event generateData(data);
+  insert storedKey(key);
+  insert storedData(data);
+  out(ch1, key);
+  out(ch2, data)
+in
+  phase0.
+
+% Phase 1: Process 1 takes a key from the table and uses it
+let phase1_process1(key:secretKey) = 
+  event useKey(key)
+in
+  phase1_process1.
+
+% Phase 1: Process 2 takes some data from the table and uses it
+let phase1_process2(data:someData) = 
+  event useData(data)
+in
+  phase1_process2.
+
+% Phase 2: Process 1 uses the key again
+let phase2_process1(key:secretKey) = 
+  event useKeyAgain(key)
+in
+  phase2_process1.
+
+% Phase 2: Process 2 uses the data again
+let phase2_process2(data:someData) = 
+  event useDataAgain(data)
+in
+  phase2_process2.
+
+% Main process: Initiate phases 0, 1, and 2 with multiple processes in phases 1 and 2
+let main = 
+  in(ch1, key:secretKey);
+  in(ch2, data:someData);
+  get storedKey(key) in
+  get storedData(data) in
+  (phase1_process1(key) | phase1_process2(data));
+  (phase2_process1(key) | phase2_process2(data))
+in
+  main.
+
+% Queries to verify that for each generation event there are corresponding usage events
+query event(generateKey(key)) ==> event(useKey(key)).
+query event(generateData(data)) ==> event(useData(data)).
+query event(useKey(key)) ==> event(useKeyAgain(key)).
+query event(useData(data)) ==> event(useDataAgain(data)).

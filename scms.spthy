@@ -1,0 +1,530 @@
+theory SCMS
+
+/* ENTITA' COINVOLTE 
+   - EE (End Entity): è il nodo dispositivo che manda i messaggi broadcast
+   - DCM (Device Configuration Manager): *Assunzione 1 per ora si può omettere, verifica che il dispositivo sia
+     legittimo e possa ricevere l'enrollment certificate
+   - ECA (Enrollment CA): è la CA che registra un dispositivo e gli rilascia l'enrollment certificate. *2 se 
+     utilizzata solo in fase di enrollment si può anche omettere
+   - ICA (Intermediate CA): *3 si possono tralasciare e considerare una sola Root CA
+   - LA (Linkage Authority): genera i pre-linkage values, usati per generare i linkage values e rendere efficace
+     la revoca. Ci sono due LA, LA1 e LA2, che operano in modo distribuito, per evitare che una sola LA riesca
+     a linkare i certificati che appartengono ad un particolare dispositivo
+   - LOP (Location Obscurer Proxy): impedisce che il dispositivo sia tracciabile attraverso i source address di
+     rete (es MAC oppure IP) *4 possiamo trascurarlo, nella verifica non consideriamo i protocolli di trasporto
+     dei messaggi
+   - MA (Misbehaviour Authority): entità che raccoglie i misbehavior reports, li analizza e decide se ci sono
+     dispositivi da revocare. In caso, inizializza il processo per collegare l'ID del certificato pseudonimo 
+     all'enrollment certificate del dispositivo maligno. Genera le CRL e aggiunge i nodi maligni scoperti alla
+     balck list contenuta all'interno della RA
+   - PCA (Pseudonym CA): rilascia i certificati pseudonimi short-term
+   - RA (Registration Authority): riceve le richieste di pseudonimi dai dispositivi, le raccoglie, le mischia e
+     invia richieste individuali di certificato alla PCA. Al suo interno ha una Black list in cui sono signati i
+     dispositivi revocati a cui non consegnare nuovi certificati.
+     
+ Fase di bootstrapping:
+ Divisa in initialization ed enrollment. Initialization: il dispositivo riceve i certificati delle varie CA (nel
+ nostro caso sono Root CA, PCA ed MA). Enrollment: il dispositivo riceve l'enrollment certificate
+ *6 In questa fase è coinvolto anche il DCM. DCM ha canale sicuro con ECA e comunica out-of-band con l'EE (secure
+ environment). L'enrollment certificate viene rilasciato al DCM, che a sua volta lo manda al nodo. La catena di
+ passaggi ECA-nodo è sicura, non serve implementare la comunicazione
+ *7 RootCA riceve le chiavi delle varie PCA, LA1, LA2 ecc out of band
+ Come lo abbiamo modellato: inizializzo la Root CA, PCA e MA (che ricevono proprio certificato e chiave pubblica della 
+ Root CA). Inizializzo il dispositivo che si crea ID e coppia chiavi privata-pubblica. Il dispositivo fa out della sua
+ chiave pubblica affinchè questa venga presa e certificata dalla Root CA. La RootCA prende, firma la chiave pubblica,
+ crea il certificato e allega nel messaggio di risposta anche la PK della PCA e della MA (NOTA: queste due chiavi non
+ sono firmate, quindi potrebbero essere prese e sostituite dall'attaccante). Questa fase dovrebbe essere sicura per 
+ l'assunzione *6 che abbiamo fatto. Quindi i due messaggi possono essere mandati su canale sicuro
+ Il dispositivo riceve il certificato, verifica che contenga la chiave pubblica per cui era stato richiesto e verifica
+ la firma fatta dalla Root CA. 
+ 
+ Certificate provisioning:
+ STEP1: il device crea il butterfly key seed, poi genera la richiesta, firma la richiesta usando il suo enrollment certificate,
+        allega l'enrollment certificate e cifra tutto con la chiave pubblica della RA
+        NOTA: un dispositivo può ricevere un solo enrollment certificate ma multipli pseudonym certificates. è questo il motivo
+        per cui !St_Device_2($Device, ~id, ~ltkDevice, pkRootCA, pkPCA, certificate) è un persistent fact
+ STEP2: la RA decifra la richiesta, verifica l'enrollment certificate, verifica che il dispositivo non sia tra quelli revocati,
+        verifica la firma sulla richiesta. (Controlla che quella sia l'unica richiesta ricevuta da quel determinato dispositivo).
+        Continua la butterfly key expansion. Richiede due pre-linkage values dalle due LA e li associa al device.
+        NOTA: RA ha una blacklist con elenco delle chiavi pubbliche degli enrollment certificate revocati
+ STEP3: la RA manda richieste individuali per ciascun pseudonimo alla PCA. La richiesta contiene le chiavi per il butterfly key
+        expansion (sia quella pubblica pseudonimo sia quella che verrà usata per cifrare), i due pre-linkage value cifrati delle LA,
+        e l'hash della richiesta hashRA-to-PCA. La RA si salva la corrispondenza hashRA-to-PCA ed enrollment certificate del device
+ STEP4: PCA decifra i pre-linkage values e calcola il linkage value lv = plvLA1 OR plvLA2. Inserisce il linkage value nel certificato
+        e poi completa il butterfly key expansions. Firma il certificato, cifra certificato e c (reconstrucion value del butterfly)
+        usando la chiave pubblica di cifratura generata dal butterfly. NOTA: PCA si salva corrispondenza lv = plv1 + plv2 cifrati e
+        in più anche la corrispondenza linkage value - hashRA-to-PCA
+ STEP5: PCA firma il pacchetto cifrato generato nello step 4 (serve per dimostrare al device che è stato cifrato dalla PCA, ATTACCO).
+        Poi manda pacchetto e firma alla RA. La RA raccoglie tutti i pacchetti indirizzati allo stesso dispositivo in un batch che
+        poi pubblica per il download
+        
+ Misbehavior report + investigation:
+ STEP1: la MA riceve dai veicoli i misbehavior report, che contengono all'interno i certificati pseudonimi dei nodi sospetti. All'interno
+        dei certificati ci sono i linkage values
+ STEP2: misbehavior detection algorithm per capire se quel nodo è da revocare
+ STEP3: MA richiede alla PCA di risolvere il linkage value nei precedenti pre-linkage vale messi in OR. La PCA ritorna gli encrypted pre
+        linkage value alla MA
+ STEP4: (la MA richiede alle LA di verificare se plv ricevuti in multipli report siano tutti associati allo stesso dispositivo). Se il
+        numero di plv associati allo stesso dispositivo supera un certo threshold, la LA risponde affermativo (il nodo è da revocare)
+ 
+ Revocation:
+ ... primi STEP uguali a sopra ...
+ STEP3: MA richiede alla PCA di mappare il linkage value all'hashRA-to-PCA. Ottiene in risposta hashRA-to-PCA
+ STEP4: MA manda hashRA-to-PCA alla RA che è in grado di recuperare il corrispondente enrollment certificate del veicolo. La RA aggiunge
+        l'enrollment certificate alla blacklist
+ ... continua ...
+ 
+ NOTA: per ora possiamo non considerare il misbehavior reporting + investigation e anche il meccanismo con cui le LA costruiscono la chain
+ 
+ TODO:
+ - verificare cosa l'attaccante riesce ad avere/riesce a fare
+ - parte relativa alle LA: è importante che siano due? Servono solo per la Misbehaviour detection oppure anche per la revoca?
+ - i prelinkage value che arrivano dalla LA devono essere firmati dalla LA?
+ - lo stesso di sopra vale anche per i messaggi mandati dalla RA alla PCA, devono essere anche firmati o basta solo che siano cifrati? 
+   Penso anche cifrati, TODO per ora sono solo cifrati
+ - l'attaccante deve poter ottenere un certificato pseudonimo valido (dovrebbe già riuscire a farlo)
+ - test ricevo messaggio firmato con un certificato pseudonimo e riesco a verificare che è valido
+ - posso ricevere più richieste per pseudonimi che hanno stessa chiave pubblica? (stessa Apub, Hpub, ecc)
+
+*/
+
+begin
+
+builtins: hashing, asymmetric-encryption, signing
+functions: epk/1, esign/2, everify/3, plus/3, etrue/0, eenc/3, edec/3, XOR/2
+equations: everify(esign(m, plus(a,fk,c)), m, plus(epk(a, epk(fk)), epk(c))) = etrue,
+	   edec(eenc(m, epk(a), epk(b)), a, b) = m
+	   /*
+	   quartetfst(quartet(a,b,c,d)) = a, quartetsnd(quartet(a,b,c,d)) = b, quartetthrd(quartet(a,b,c,d)) = c, 
+	   quartetfrth(quartet(a,b,c,d)) = d,
+	   sextetfst(sextet(a,b,c,d,e,f)) = a, sextetsnd(sextet(a,b,c,d,e,f)) = b, sextetthrd(sextet(a,b,c,d,e,f)) = c,
+	   sextetfrth(sextet(a,b,c,d,e,f)) = d, sextetffth(sextet(a,b,c,d,e,f)) = e, sextetsxth(sextet(a,b,c,d,e,f)) = f */
+
+/* RESTRICTIONS */
+restriction OnlyOnceRestriction: 
+ "All name #i #j. OnlyOnce(name)@#i & OnlyOnce(name)@#j ==> #i = #j"
+
+restriction Equality:
+  "All m n #i. Eq(m,n)@i ==> m = n"
+  
+restriction DeviceCanGetOnlyOneEnrollmentCertificate:
+  "All id #i #j. FirstRequestFromThisId(id)@#i & FirstRequestFromThisId(id)@#j ==> #i = #j"
+
+/* Check that the event CertificateRevoked(certpk) has never been launched 
+restriction CertificateRevocation:
+  "All certpk #i. CheckCertificateIsNotRevoked(certpk)@i ==> not(Ex #j. CertificateRevoked(certpk)@j & j<i )"
+*/
+
+/* CREATE KEYS */
+rule Register_pk:
+[ Fr(~ltk) ]
+--[]->
+[ !Ltk($A, ~ltk), !Pk($A, pk(~ltk)), Out(pk(~ltk)) ]
+
+
+/* SECURE CHANNEL RULES:
+   The attacker cannot read or modify messages exchanged over this channel. Furthermore, there is authentication of the 
+   parts. '!Sec' is a persistent fact, meaning the attacker can reply messages
+*/
+rule ChanOut_S:
+[ Out_S( $A, $B, x ) ]
+--[ ChanOut_S( $A, $B, x ) ]->
+[ !Sec( $A, $B, x ) ]
+
+rule ChanIn_S:
+[ !Sec( $A, $B, x ) ]
+--[ ChanIn_S( $A, $B, x ) ]->
+[ In_S( $A, $B, x ) ]
+
+
+/** INIT **/
+rule RootCA_init:
+[ !Ltk($RootCA, ~ltkRootCA)
+  //In case, here we can add other keys/certificates,
+]
+--[ OnlyOnce('RootCA'), RootCA_Initialised($RootCA) ]->
+[ St_RootCA_1($RootCA, ~ltkRootCA),
+  !RootCA_PK($RootCA, pk(~ltkRootCA)),
+  !RootCA_SK($RootCA, ~ltkRootCA)
+]
+
+rule PCA_init:
+[ !Ltk($PCA, ~ltkPCA),
+  //In case, here we can add other keys/certificates
+  !RootCA_PK($RootCA, pkRootCA)	//out of band
+]
+--[ OnlyOnce('PCA'), PCA_Initialised($PCA) ]->
+[ 
+  St_PCA_1($PCA, ~ltkPCA, pkRootCA),
+  !PCA_PK($PCA, pk(~ltkPCA)),
+  !PCA_SK($PCA, ~ltkPCA)
+]
+
+rule MA_init:
+[
+  !Ltk($MA, ~ltkMA),
+  !RootCA_PK($RootCA, pkRootCA)
+]
+--[ OnlyOnce('MA'), MA_Initialised($MA) ]->
+[
+  St_MA_1($MA, ~ltkMA, pkRootCA),
+  !MA_PK($MA, pk(~ltkMA))
+]
+
+rule RA_init:
+[
+  !Ltk($RA, ~ltkRA),
+  !RootCA_PK($RootCA, pkRootCA)
+]
+--[ OnlyOnce('RA'), RA_Initialised($RA) ]->
+[
+  St_RA_1($RA, ~ltkRA, pkRootCA),
+  !RA_PK($RA, pk(~ltkRA)),
+  !RA_SK($RA, ~ltkRA)
+]
+
+rule LA1_init:
+[
+  !Ltk($LA1, ~ltkLA1),
+  !RootCA_PK($RootCA, pkRootCA)
+]
+--[ OnlyOnce('LA1'), LA1_Initialised($LA1) ]->
+[
+  !LA1_PK($LA1, pk(~ltkLA1)),
+  !LA1_SK($LA1, ~ltkLA1)
+]
+
+rule LA2_init:
+[
+  !Ltk($LA2, ~ltkLA2),
+  !RootCA_PK($RootCA, pkRootCA)
+]
+--[ OnlyOnce('LA2'), LA2_Initialised($LA2) ]->
+[
+  !LA2_PK($LA2, pk(~ltkLA2)),
+  !LA2_SK($LA2, ~ltkLA2)
+]
+
+
+
+/** BOOTSTRAPPING PHASE **/
+
+/* NOTE: only valid devices can receive the enrollment certificate (assured by DCM) */
+rule Device_init:
+[ Fr(~id),			//device id
+  !Ltk($Device, ~ltkDevice)
+]
+--[ Device_initialized($Device, ~id, ~ltkDevice),
+    AskForEnrollmentCertificate(~id, pk(~ltkDevice))
+  ]->
+[ St_Device_1($Device, ~id, ~ltkDevice), 
+  Out_S($Device, $RootCA, <pk(~ltkDevice), ~id>)
+]
+
+rule RootCA_bootstrap_device:
+  let certificate = <pkDevice, sign(pkDevice, ~ltkRootCA)>
+  in
+[ In_S($Device, $RootCA, <pkDevice, ~id>), 
+  !RootCA_SK($RootCA, ~ltkRootCA),
+  !PCA_PK($PCA, pkPCA),	//out of band
+  !MA_PK($MA, pkMA), 	//out of band
+  !RA_PK($RA, pkRA)	//out of band
+]
+--[ FirstRequestFromThisId(~id),
+    EnrollmentCertificateReleased(~id, pkDevice, certificate)
+  ]->
+[  Out_S($RootCA, $Device, <pk(~ltkRootCA), pkPCA, pkMA, pkRA, certificate, ~id>),	//enrollment certificate
+   ENROLL(~id, pkDevice)
+]
+
+rule Device_bootstrap:
+  let certificate = <pkdev, signature>
+  in
+[ In_S($RootCA, $Device, <pkRootCA, pkPCA, pkMA, pkRA, certificate, ~idr>),
+  St_Device_1($Device, ~id, ~ltkDevice)
+]
+--[ Eq(~idr, ~id),	//check if certificate is for me
+    //check  pkdev == pk(~ltkDevice) && signature corretta usando pkRootCA
+    Eq(pkdev, pk(~ltkDevice)),
+    Eq(verify(signature, pkdev, pkRootCA), true),
+    GotEnrollmentCertificate(~id, pk(~ltkDevice), certificate)
+  ]->
+[ !St_Device_2($Device, ~id, ~ltkDevice, pkRootCA, pkPCA, pkMA, pkRA, certificate) ]
+
+
+/* ADVERSARY GETS A VALID ENROLLMENT CERTIFICATE */
+rule Adversary_enrollment_certificate:
+let cert = <pkAttacker, sign(pkAttacker, ~ltkRootCA)>
+in
+[ In(<attackerid, pkAttacker>), 
+  !RootCA_SK($RootCA, ~ltkRootCA)
+]
+--[ FirstRequestFromThisId(attackerid),
+    EnrollmentCertificateReleasedForAttacker(pkAttacker, cert)
+  ]->
+[ Out(cert),
+  ENROLL(attackerid, pkAttacker)
+]
+
+
+
+
+/** PSEUDONYM CERTIFICATE PROVISIONING PHASE **/
+
+rule Device_cert_provisioning:
+  let Apub = epk(~a)
+      Hpub = epk(~h)
+      req = <Apub, ~fk, Hpub, ~fe>
+      signreq = sign(req, ~ltkDevice)
+      mex = <req, signreq, certificate>
+      encmex = aenc(mex, pkRA)
+  in
+[ !St_Device_2($Device, ~id, ~ltkDevice, pkRootCA, pkPCA, pkMA, pkRA, certificate),
+  Fr(~a),
+  Fr(~fk),
+  Fr(~h),
+  Fr(~fe),
+  Fr(~reqid)
+]
+--[ AskForPseudonymCertificate(~id, ~reqid, Apub, Hpub),
+    OUT_Device_cert_provisioning(mex)
+  ]->
+[ Out(encmex),
+  St_Device_3($Device, ~id, ~ltkDevice, pkRootCA, pkPCA, pkMA, pkRA, certificate, ~reqid, ~a, ~fk, ~h, ~fe)
+]
+
+rule LA1_send_prelinkage_value:
+  let encsignplv = aenc(<~plv, sign(~plv, ~ltkLA1)>, pkPCA)
+  in
+[ Fr(~plv),
+  !PCA_PK($PCA, pkPCA),
+  !LA1_SK($LA1, ~ltkLA1)
+]
+--[ LA1PrelinkageValueSent(encsignplv) ]->
+[ Out(encsignplv) ]
+
+rule LA2_send_prelinkage_value:
+  let encsignplv = aenc(<~plv, sign(~plv, ~ltkLA2)>, pkPCA)
+  in
+[ Fr(~plv),
+  !PCA_PK($PCA, pkPCA),
+  !LA2_SK($LA2, ~ltkLA2)
+]
+--[ LA2PrelinkageValueSent(encsignplv) ]->
+[ Out(encsignplv) ]
+
+rule RA_receive_pseudonym_cert_request:
+  let mex = adec(encmex, ~ltkRA)	//equivalent to <req, signreq, certificate> = <req, <signreq, certificate>>
+      req = fst(mex)			//equivalent to <Apub, ~fk, Hpub, ~fe> = <Apub, <~fk, <Hpub, ~fe>>>
+      signreq = fst(snd(mex))
+      cert = snd(snd(mex))
+      pkdev = fst(cert)
+      rootSignature = snd(cert)
+      Apub = fst(req)
+      fk = fst(snd(req))
+      Hpub = fst(snd(snd(req)))
+      fe = snd(snd(snd(req)))
+      Bpub = epk(fk)
+      Jpub = epk(fe)
+      outreq = <Apub, Bpub, Hpub, Jpub, encsignplv1, encsignplv2>
+      houtreq = h(outreq)
+      outmex = <outreq, houtreq>
+      encoutmex = aenc(outmex, pkPCA)
+  in
+[ !RA_SK($RA, ~ltkRA),
+  !RootCA_PK($RootCA, pkRootCA),
+  !PCA_PK($PCA, pkPCA),
+  In(encmex),
+  In(encsignplv1),
+  In(encsignplv2)
+]
+--[ Eq(verify(rootSignature, pkdev, pkRootCA), true),	//verifico che il certificato sia valido
+    CheckCertificateIsNotRevoked(pkdev),		//verifico che il dispositivo non sia tra quelli revocati
+    Eq(verify(signreq, req, pkdev), true),		//verifico la firma sulla richiesta
+    RAPseudonymCertificateRequest(Apub, Bpub, Hpub, Jpub, houtreq, encsignplv1, encsignplv2),
+    IN_RA_receive_pseudonym_cert_request_Device(mex),
+    OUT_RA_receive_pseudonym_cert_request(outmex)		
+  ]->
+[ Out(encoutmex),
+  RA_DEVICE_PRELINKAGE(pkdev, encsignplv1, encsignplv2),
+  RA_DEVICE_HASH(pkdev, houtreq)	
+]
+
+rule PCA_receive_pseudonym_cert_request:
+  let mex = adec(encmex, ~ltkPCA)		//equivalent to <req, hreq>
+      req = fst(mex)				//equivalent to <Apub, Bpub, Hpub, Jpub, encplv1, encplv2> = <Apub, <Bpub, <Hpub, <Jpub, <encplv1, encplv2>>>>>
+      hreq = snd(mex)
+      Apub = fst(req)
+      Bpub = fst(snd(req))
+      Hpub = fst(snd(snd(req)))
+      Jpub = fst(snd(snd(snd(req))))
+      encsignplv1 = fst(snd(snd(snd(snd(req)))))
+      encsignplv2 = snd(snd(snd(snd(snd(req)))))
+      signplv1 = adec(encsignplv1, ~ltkPCA)
+      plv1 = fst(signplv1)
+      sign1 = snd(signplv1)
+      signplv2 = adec(encsignplv2, ~ltkPCA)
+      plv2 = fst(signplv2)
+      sign2 = snd(signplv2)
+      lv = XOR(plv1, plv2)
+      Cpub = epk(~c)
+      PKsign = plus(Apub, Bpub, Cpub)
+      pseudocert = <PKsign, lv>
+      signature = sign(pseudocert, ~ltkPCA)
+      outmex = <pseudocert, signature, ~c>
+      encoutmex = eenc(outmex, Hpub, Jpub)
+      signencoutmex = sign(encoutmex, ~ltkPCA) 
+  in
+[ !PCA_SK($PCA, ~ltkPCA),
+  !LA1_PK($LA1, pkLA1),
+  !LA2_PK($LA2, pkLA2),
+  In(encmex),
+  Fr(~c)	//reconstruction value
+]
+--[ Eq(verify(sign1, plv1, pkLA1), true),	//verifico firma sul pre-linkage value (che siano stati generati dalla LA1)
+    Eq(verify(sign2, plv2, pkLA2), true),	//verifico firma sul pre-linkage value (che siano stati generati dalla LA2)
+    PseudonymCertificateReleased(hreq, PKsign, ~c, pseudocert),
+    IN_PCA_receive_pseudonym_cert_request_RA(mex),
+    OUT_PCA_receive_pseudonym_cert_request(outmex)
+  ]->
+[ Out(<encoutmex, signencoutmex>),
+  PCA_LV_HASH(lv, hreq),
+  PCA_LV_PLVS(lv, encsignplv1, encsignplv2)
+]
+
+
+rule Device_receive_pseudonym_cert:
+  let mex = edec(encmex, ~h, ~fe)		//equivalent to <pseudocert, <signature, ~c>>
+      pseudocert = fst(mex)			//equivalent to <PKsign, lv>
+      signaturepseudocert = fst(snd(mex))
+      c = snd(snd(mex))
+      SK = plus(~a, ~fk, c)
+      PKpseudo = fst(pseudocert)
+  in
+[ In(<encmex, signencmex>),
+  St_Device_3($Device, ~id, ~ltkDevice, pkRootCA, pkPCA, pkMA, pkRA, enrollcertificate, ~reqid, ~a, ~fk, ~h, ~fe)
+]
+--[ Eq(verify(signencmex, encmex, pkPCA), true),	//verifico firma sul messaggio ricevuto (integrità e autenticazione PCA)
+    Eq(verify(signaturepseudocert, pseudocert, pkPCA), true), 	//verifico firma sul certificato pseudonimo
+    GotPseudonymCertificate(~id, ~reqid, PKpseudo, pseudocert, c),
+    IN_Device_receive_pseudonym_cert_PCA(mex)
+  ]->
+[ !St_Device_4($Device, ~id, ~ltkDevice, pkRootCA, pkPCA, pkMA, pkRA, enrollcertificate, SK, pseudocert, signaturepseudocert)
+]
+
+
+
+
+
+
+
+
+
+
+
+
+
+//TEST ENROLLMENT CERTIFICATE
+/*
+rule Device_sent_secret:
+  let signature = sign(~secret, ~ltkDevice)
+  in
+[ !St_Device_2($Device, ~id, ~ltkDevice, pkRootCA, pkPCA, pkMA, pkRA, certificate),
+  Fr(~secret)
+]
+--[
+  Send($Device, signature, certificate),
+  Honest($Device)
+  ]->
+[ Out(<~secret, signature, certificate>)
+]
+
+rule receive_secret:
+let certificate = <pkDevice, rootSignature>
+in
+[ 
+  !Ltk(Entity, ltkEntity),
+  In(<secret, signature, certificate>),
+  !RootCA_PK($RootCA, pkRootCA) ]
+--[
+  Eq(verify(signature, secret, pkDevice), true),	//verifica che firma del dispositivo sia corretta
+  Eq(verify(rootSignature, pkDevice, pkRootCA), true),	//verifico la signature della RootCA all'interno del certificato
+  Recv(Entity, signature, certificate)
+]->
+[]
+
+lemma test_enrollment_certificate:
+exists-trace
+  "Ex #i Entity signature certificate. 
+	Recv(Entity, signature, certificate) @i
+  "
+  
+*/
+
+
+
+
+
+
+/* SOURCE LEMMAS */
+
+lemma types [sources]:
+" (All m #i.
+   IN_RA_receive_pseudonym_cert_request_Device(m)@i
+   ==>
+	( (Ex #j. KU(m) @ j & j < i)
+	| (Ex #j. OUT_Device_cert_provisioning(m) @ j)
+	)
+  )
+  &
+  (All m2 #i2.
+   IN_PCA_receive_pseudonym_cert_request_RA(m2)@i2
+   ==>
+	( (Ex #j2. KU(m2) @ j2 & j2 < i2)
+	| (Ex #j2. OUT_RA_receive_pseudonym_cert_request(m2) @ j2)
+	)
+  )
+  &
+  (All m3 #i3.
+   IN_Device_receive_pseudonym_cert_PCA(m3)@i3
+   ==>
+	( (Ex #j3. KU(m3) @ j3 & j3 < i3)
+	| (Ex #j3. OUT_PCA_receive_pseudonym_cert_request(m3) @ j3)
+	)
+  )
+"
+
+
+
+/* LEMMAS */
+
+lemma sanity_check_Bootstrapping:
+exists-trace
+  "Ex #i #i2 #i3 id pk cert. 
+	AskForEnrollmentCertificate(id, pk) @i &
+	EnrollmentCertificateReleased(id, pk, cert) @i2 &
+	GotEnrollmentCertificate(id, pk, cert) @i3 &
+	i < i2 &
+	i2 < i3
+  "
+  
+
+  
+lemma sanity_check_Certificate_Provisioning:
+exists-trace
+  "Ex #i #i2 #i3 #i4 #i5 #i6 id reqid A H B J hreq PK c cert encsignplv1 encsignplv2. 
+	AskForPseudonymCertificate(id, reqid, A, H)@i &
+	LA1PrelinkageValueSent(encsignplv1)@i2 &
+	LA2PrelinkageValueSent(encsignplv2)@i3 & 
+	RAPseudonymCertificateRequest(A, B, H, J, hreq, encsignplv1, encsignplv2)@i4 &
+	PseudonymCertificateReleased(hreq, PK, c, cert)@i5 &
+	GotPseudonymCertificate(id, reqid, PK, cert, c)@i6 &
+	i < i2 &
+	i2 < i3 &
+	i3 < i4 &
+	i4 < i5 &
+	i5 < i6 
+  "
+
+
+end
